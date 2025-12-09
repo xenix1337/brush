@@ -48,6 +48,8 @@ pub struct ProcessArgs {
     pub process_config: ProcessConfig,
     #[clap(flatten)]
     pub rerun_config: RerunConfig,
+    #[clap(flatten)]
+    pub external_refine_config: ExternalRefineConfig,
 }
 
 impl Default for ProcessArgs {
@@ -70,4 +72,16 @@ pub struct RerunConfig {
     /// The maximum size of images from the dataset logged to rerun.
     #[arg(long, help_heading = "Rerun options", default_value = "512")]
     pub rerun_max_img_size: u32,
+}
+
+#[derive(Clone, Args)]
+pub struct ExternalRefineConfig {
+    /// How often to run external refinement (in iterations).
+    #[arg(long, help_heading = "External Refinement")]
+    pub refine_external_every: Option<u32>,
+
+    /// Command to execute for external refinement.
+    /// The command should accept PLY data on stdin and output PLY data on stdout.
+    #[arg(long, help_heading = "External Refinement")]
+    pub refine_external_cmd: Option<String>,
 }

@@ -22,11 +22,18 @@ use burn::{backend::Autodiff, module::AutodiffModule, prelude::Backend};
 use burn_cubecl::cubecl::Runtime;
 use burn_wgpu::{WgpuDevice, WgpuRuntime};
 use rand::SeedableRng;
-use std::{path::Path, sync::Arc};
+use std::{
+    io::{Cursor, Write},
+    path::Path,
+    process::{Command, Stdio},
+    sync::Arc,
+};
 use tokio::sync::oneshot::Receiver;
 use tokio_with_wasm::alias as tokio_wasm;
 use tracing::{Instrument, trace_span};
 use web_time::{Duration, Instant};
+
+use brush_serde::{load_splat_from_ply, splat_to_ply};
 
 pub(crate) async fn train_stream(
     vfs: Arc<BrushVfs>,
@@ -126,6 +133,83 @@ pub(crate) async fn train_stream(
             .instrument(trace_span!("Refine splats"))
             .await;
         splats = new_splats;
+
+        // External refinement
+        if let Some(every) = process_args.external_refine_config.refine_external_every
+            && let Some(cmd) = &process_args.external_refine_config.refine_external_cmd
+            && iter > 0
+            && iter % every == 0
+        {
+            let span = trace_span!("External Refinement");
+            let _enter = span.enter();
+            log::info!("Starting external refinement at iter {}", iter);
+
+            // 1. Serialize current splats to PLY
+            let ply_data = match splat_to_ply(splats.valid()).await {
+                Ok(data) => data,
+                Err(e) => {
+                    log::error!("Failed to serialize splats for external refinement: {}", e);
+                    Vec::new() // Skip if serialization fails
+                }
+            };
+
+            if !ply_data.is_empty() {
+                // 2. Spawn external command
+                // Split command string into program and args
+                let mut parts = cmd.split_whitespace();
+                if let Some(program) = parts.next() {
+                    let mut command = Command::new(program);
+                    command.args(parts);
+                    command.stdin(Stdio::piped());
+                    command.stdout(Stdio::piped());
+
+                    match command.spawn() {
+                        Ok(mut child) => {
+                            // 3. Write PLY to stdin
+                            let mut stdin = child.stdin.take().expect("Failed to open stdin");
+                            let write_res = std::thread::spawn(move || {
+                                stdin.write_all(&ply_data)
+                            }).join();
+
+                            if let Err(_) = write_res {
+                                log::error!("Failed to write to external process stdin");
+                            }
+
+                            // 4. Read PLY from stdout
+                            match child.wait_with_output() {
+                                Ok(output) => {
+                                    if output.status.success() {
+                                        let cursor = Cursor::new(output.stdout);
+                                        // 5. Deserialize
+                                        match load_splat_from_ply(cursor, None, device.clone()).await {
+                                            Ok(msg) => {
+                                                log::info!("External refinement successful. Loaded {} splats.", msg.splats.num_splats());
+                                                // Retain gradients if possible? No, external tool likely changes topology.
+                                                // So we treat it as new splats.
+                                                // We need to re-wrap into Autodiff.
+                                                splats = msg.splats.into_autodiff();
+
+                                                // Re-initialize trainer with new splats to reset optimizer state
+                                                trainer = SplatTrainer::new(&process_args.train_config, &device, splats.clone()).await;
+
+                                            }
+                                            Err(e) => log::error!("Failed to deserialize refined splats: {}", e),
+                                        }
+                                    } else {
+                                        log::error!("External refinement command failed with status: {}", output.status);
+                                        if !output.stderr.is_empty() {
+                                            log::error!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+                                        }
+                                    }
+                                }
+                                Err(e) => log::error!("Failed to wait on external process: {}", e),
+                            }
+                        }
+                        Err(e) => log::error!("Failed to spawn external command '{}': {}", cmd, e),
+                    }
+                }
+            }
+        }
 
         // We just finished iter 'iter', now starting iter + 1.
         let iter = iter + 1;
