@@ -108,6 +108,25 @@ async fn load_dataset_inner(
                 let center_uv = center / glam::vec2(cam_data.width as f32, cam_data.height as f32);
 
                 let Some(path) = find_img(&vfs, &img_info.name) else {
+                    if load_args.load_dummy_images {
+                        log::warn!("Image not found, using dummy: {}", img_info.name);
+                        let fovx = camera::focal_to_fov(cam_data.focal().0, cam_data.width as u32);
+                        let fovy = camera::focal_to_fov(cam_data.focal().1, cam_data.height as u32);
+                        let center_uv = cam_data.principal_point() / glam::vec2(cam_data.width as f32, cam_data.height as f32);
+                        let world_to_cam = glam::Affine3A::from_rotation_translation(img_info.quat, img_info.tvec);
+                        let cam_to_world = world_to_cam.inverse();
+                        let (_, quat, translation) = cam_to_world.to_scale_rotation_translation();
+                        
+                        let camera = Camera::new(translation, quat, fovx, fovy, center_uv);
+                        let image = LoadImage::dummy(
+                            vfs.clone(),
+                            img_info.name.clone(),
+                            cam_data.width as u32,
+                            cam_data.height as u32,
+                            load_args.max_resolution,
+                        );
+                        return Some(SceneView { camera, image });
+                    }
                     log::warn!("Image not found: {}", img_info.name);
                     return None;
                 };

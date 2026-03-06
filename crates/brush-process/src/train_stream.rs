@@ -61,7 +61,11 @@ pub(crate) async fn train_stream(
     let mut rng = rand::rngs::StdRng::from_seed([process_config.seed as u8; 32]);
 
     log::info!("Loading dataset");
-    let (initial_splats, dataset) = load_dataset(vfs.clone(), &process_args.load_config, &device)
+    let mut load_config = process_args.load_config.clone();
+    if process_args.process_config.render.is_some() {
+        load_config.load_dummy_images = true;
+    }
+    let (initial_splats, dataset) = load_dataset(vfs.clone(), &load_config, &device)
         .instrument(trace_span!("Load dataset"))
         .await?;
 
@@ -98,7 +102,13 @@ pub(crate) async fn train_stream(
 
     emitter.emit(ProcessMessage::DoneLoading).await;
 
-    let splats = if let Some(init_msg) = initial_splats {
+    let splats = if let Some(render_path) = &process_args.process_config.render {
+        log::info!("Loading splats from {} for rendering", render_path);
+        let data = std::fs::read(render_path).context("Failed to read render PLY file")?;
+        let cursor = std::io::Cursor::new(data);
+        let msg = load_splat_from_ply(cursor, None, device.clone()).await?;
+        msg.splats
+    } else if let Some(init_msg) = initial_splats {
         init_msg.splats
     } else {
         log::info!("Starting with random splat config.");
@@ -110,9 +120,27 @@ pub(crate) async fn train_stream(
     };
 
     let splats = splats.with_sh_degree(process_args.model_config.sh_degree);
-    let mut splats = splats.into_autodiff();
-
     let mut eval_scene = dataset.eval;
+
+    if process_args.process_config.render.is_some() {
+        log::info!("Render mode active. Rendering dataset views and exiting.");
+        let res = run_dataset_render(
+            &device,
+            &emitter,
+            &visualize,
+            process_config,
+            splats,
+            &dataset.train,
+        )
+        .await;
+        warner
+            .warn_if_err(res.context("Failed to render dataset views"))
+            .await;
+        emitter.emit(ProcessMessage::DoneTraining).await;
+        return Ok(());
+    }
+
+    let mut splats = splats.into_autodiff();
 
     let mut train_duration = Duration::from_secs(0);
     let mut dataloader = SceneLoader::new(&dataset.train, 42);
@@ -336,6 +364,58 @@ async fn run_eval(
     emitter
         .emit(ProcessMessage::EvalResult {
             iter,
+            avg_psnr: psnr,
+            avg_ssim: ssim,
+        })
+        .await;
+
+    Ok(())
+}
+
+async fn run_dataset_render(
+    device: &WgpuDevice,
+    emitter: &TryStreamEmitter<ProcessMessage, anyhow::Error>,
+    visualize: &VisualizeTools,
+    process_config: &ProcessConfig,
+    splats: Splats<MainBackend>,
+    train_scene: &Scene,
+) -> Result<(), anyhow::Error> {
+    log::info!("Running dataset render");
+    let mut psnr = 0.0;
+    let mut ssim = 0.0;
+    let mut count = 0;
+
+    for (i, view) in train_scene.views.iter().enumerate() {
+        tokio_wasm::task::yield_now().await;
+
+        let eval_img = view.image.load().await?;
+        let sample = eval_stats(
+            &splats,
+            &view.camera,
+            eval_img,
+            view.image.alpha_mode(),
+            device,
+        )
+        .context("Failed to run render for sample.")?;
+
+        count += 1;
+        psnr += sample.psnr.clone().into_scalar_async().await?;
+        ssim += sample.ssim.clone().into_scalar_async().await?;
+
+        let export_path = Path::new(&process_config.export_path).to_owned();
+        let img_name = view.image.img_name();
+        let path = Path::new(&export_path)
+            .join(format!("{img_name}.png"));
+        eval_save_to_disk(&sample, &path).await?;
+
+        visualize.log_eval_sample(0, i as u32, sample).await?;
+    }
+    psnr /= count as f32;
+    ssim /= count as f32;
+    visualize.log_eval_stats(0, psnr, ssim)?;
+    emitter
+        .emit(ProcessMessage::EvalResult {
+            iter: 0,
             avg_psnr: psnr,
             avg_ssim: ssim,
         })

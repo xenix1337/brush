@@ -18,10 +18,16 @@ pub enum ViewType {
     Test,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImageSource {
+    File(PathBuf),
+    Dummy { name: String, width: u32, height: u32 },
+}
+
 #[derive(Clone, Debug)]
 pub struct LoadImage {
     vfs: Arc<BrushVfs>,
-    path: PathBuf,
+    source: ImageSource,
     mask_path: Option<PathBuf>,
     max_resolution: u32,
     alpha_mode: AlphaMode,
@@ -29,7 +35,7 @@ pub struct LoadImage {
 
 impl PartialEq for LoadImage {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
+        self.source == other.source
             && self.mask_path == other.mask_path
             && self.max_resolution == other.max_resolution
     }
@@ -53,21 +59,45 @@ impl LoadImage {
 
         Self {
             vfs,
-            path,
+            source: ImageSource::File(path),
             mask_path,
             max_resolution,
             alpha_mode,
         }
     }
 
+    pub fn dummy(
+        vfs: Arc<BrushVfs>,
+        name: String,
+        width: u32,
+        height: u32,
+        max_resolution: u32,
+    ) -> Self {
+        Self {
+            vfs,
+            source: ImageSource::Dummy { name, width, height },
+            mask_path: None,
+            max_resolution,
+            alpha_mode: AlphaMode::Transparent,
+        }
+    }
+
     pub async fn load(&self) -> image::ImageResult<DynamicImage> {
-        let mut img_bytes = vec![];
-        self.vfs
-            .reader_at_path(&self.path)
-            .await?
-            .read_to_end(&mut img_bytes)
-            .await?;
-        let mut img = image::load_from_memory(&img_bytes)?;
+        let mut img = match &self.source {
+            ImageSource::File(path) => {
+                let mut img_bytes = vec![];
+                self.vfs
+                    .reader_at_path(path)
+                    .await?
+                    .read_to_end(&mut img_bytes)
+                    .await?;
+                image::load_from_memory(&img_bytes)?
+            }
+            ImageSource::Dummy { width, height, .. } => {
+                let rgba = image::RgbaImage::from_pixel(*width, *height, image::Rgba([0, 0, 0, 0]));
+                DynamicImage::ImageRgba8(rgba)
+            }
+        };
 
         // Copy over mask.
         // TODO: Interleave this work better & speed things up here.
@@ -120,11 +150,18 @@ impl LoadImage {
     }
 
     pub fn img_name(&self) -> String {
-        Path::new(&self.path)
-            .file_stem()
-            .expect("No file name for eval view.")
-            .to_string_lossy()
-            .to_string()
+        match &self.source {
+            ImageSource::File(path) => Path::new(path)
+                .file_stem()
+                .expect("No file name for eval view.")
+                .to_string_lossy()
+                .to_string(),
+            ImageSource::Dummy { name, .. } => Path::new(name)
+                .file_stem()
+                .expect("No file name for eval view.")
+                .to_string_lossy()
+                .to_string(),
+        }
     }
 }
 

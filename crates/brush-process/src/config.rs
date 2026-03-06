@@ -34,6 +34,10 @@ pub struct ProcessConfig {
         default_value = "export_{iter}.ply"
     )]
     pub export_name: String,
+
+    /// PLY file to use for rendering dataset views. If provided, training is skipped.
+    #[arg(long, help_heading = "Process options")]
+    pub render: Option<String>,
 }
 
 #[derive(Parser, Clone)]

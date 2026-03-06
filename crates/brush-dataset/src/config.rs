@@ -34,4 +34,7 @@ pub struct LoadDataseConfig {
     /// Whether to interpret an alpha channel (or masks) as transparency or masking.
     #[arg(long, help_heading = "Dataset Options")]
     pub alpha_mode: Option<AlphaMode>,
+    /// Whether to load missing images as dummy views
+    #[arg(skip)]
+    pub load_dummy_images: bool,
 }
