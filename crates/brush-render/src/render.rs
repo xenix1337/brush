@@ -1,6 +1,6 @@
 use super::shaders;
 use crate::{
-    INTERSECTS_UPPER_BOUND, MainBackendBase,
+    INTERSECTS_UPPER_BOUND, MainBackendBase, RenderMode,
     camera::Camera,
     dim_check::DimCheck,
     kernels::{MapGaussiansToIntersect, ProjectSplats, ProjectVisible, Rasterize},
@@ -65,6 +65,7 @@ pub(crate) fn render_forward(
     raw_opacities: CubeTensor<WgpuRuntime>,
     background: Vec3,
     bwd_info: bool,
+    mode: RenderMode,
 ) -> (CubeTensor<WgpuRuntime>, RenderAux<MainBackendBase>) {
     assert!(
         img_size[0] > 0 && img_size[1] > 0,
@@ -370,7 +371,9 @@ pub(crate) fn render_forward(
 
     // Compile the kernel, including/excluding info for backwards pass.
     // see the BWD_INFO define in the rasterize shader.
-    let raster_task = Rasterize::task(bwd_info, cfg!(target_family = "wasm"));
+    let render_indexes = mode == RenderMode::Indexes;
+    let render_depth = mode == RenderMode::Depth;
+    let raster_task = Rasterize::task(bwd_info, cfg!(target_family = "wasm"), render_indexes, render_depth);
 
     // SAFETY: Kernel checked to have no OOB, bounded loops.
     unsafe {

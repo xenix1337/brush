@@ -9,7 +9,7 @@ use anyhow::Context;
 use async_fn_stream::TryStreamEmitter;
 use brush_dataset::{load_dataset, scene::Scene, scene_loader::SceneLoader};
 use brush_render::{
-    MainBackend,
+    MainBackend, RenderMode,
     gaussian_splats::{RandomSplatsConfig, Splats},
 };
 use brush_train::{
@@ -62,7 +62,10 @@ pub(crate) async fn train_stream(
 
     log::info!("Loading dataset");
     let mut load_config = process_args.load_config.clone();
-    if process_args.process_config.render.is_some() {
+    
+    let is_render_only = process_args.process_config.render.is_some() || process_args.process_config.render_indexes.is_some() || process_args.process_config.render_depth.is_some();
+    
+    if is_render_only {
         load_config.load_dummy_images = true;
     }
     let (initial_splats, dataset) = load_dataset(vfs.clone(), &load_config, &device)
@@ -102,7 +105,11 @@ pub(crate) async fn train_stream(
 
     emitter.emit(ProcessMessage::DoneLoading).await;
 
-    let splats = if let Some(render_path) = &process_args.process_config.render {
+    let render_path = process_args.process_config.render.as_ref()
+        .or(process_args.process_config.render_indexes.as_ref())
+        .or(process_args.process_config.render_depth.as_ref());
+
+    let splats = if let Some(render_path) = render_path {
         log::info!("Loading splats from {} for rendering", render_path);
         let data = std::fs::read(render_path).context("Failed to read render PLY file")?;
         let cursor = std::io::Cursor::new(data);
@@ -122,8 +129,16 @@ pub(crate) async fn train_stream(
     let splats = splats.with_sh_degree(process_args.model_config.sh_degree);
     let mut eval_scene = dataset.eval;
 
-    if process_args.process_config.render.is_some() {
+    if is_render_only {
         log::info!("Render mode active. Rendering dataset views and exiting.");
+        
+        let mut render_mode = RenderMode::Standard;
+        if process_args.process_config.render_indexes.is_some() {
+            render_mode = RenderMode::Indexes;
+        } else if process_args.process_config.render_depth.is_some() {
+            render_mode = RenderMode::Depth;
+        }
+
         let res = run_dataset_render(
             &device,
             &emitter,
@@ -131,6 +146,7 @@ pub(crate) async fn train_stream(
             process_config,
             splats,
             &dataset.train,
+            render_mode,
         )
         .await;
         warner
@@ -259,6 +275,7 @@ pub(crate) async fn train_stream(
                 splats.valid(),
                 iter,
                 eval_scene,
+                RenderMode::Standard,
             )
             .await;
             warner
@@ -324,6 +341,7 @@ async fn run_eval(
     splats: Splats<MainBackend>,
     iter: u32,
     eval_scene: &Scene,
+    mode: RenderMode,
 ) -> Result<(), anyhow::Error> {
     let mut psnr = 0.0;
     let mut ssim = 0.0;
@@ -339,6 +357,7 @@ async fn run_eval(
             &view.camera,
             eval_img,
             view.image.alpha_mode(),
+            mode,
             device,
         )
         .context("Failed to run eval for sample.")?;
@@ -379,6 +398,7 @@ async fn run_dataset_render(
     process_config: &ProcessConfig,
     splats: Splats<MainBackend>,
     train_scene: &Scene,
+    mode: RenderMode,
 ) -> Result<(), anyhow::Error> {
     log::info!("Running dataset render");
     let mut psnr = 0.0;
@@ -394,6 +414,7 @@ async fn run_dataset_render(
             &view.camera,
             eval_img,
             view.image.alpha_mode(),
+            mode,
             device,
         )
         .context("Failed to run render for sample.")?;

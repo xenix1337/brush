@@ -9,7 +9,7 @@ use burn_wgpu::WgpuRuntime;
 use glam::Vec3;
 
 use crate::{
-    MainBackendBase, SplatForward,
+    MainBackendBase, RenderMode, SplatForward,
     camera::Camera,
     render::{calc_tile_bounds, max_intersections, render_forward},
     render_aux::RenderAux,
@@ -28,9 +28,10 @@ impl SplatForward<Self> for MainBackendBase {
         opacity: FloatTensor<Self>,
         background: Vec3,
         bwd_info: bool,
+        mode: RenderMode,
     ) -> (FloatTensor<Self>, RenderAux<Self>) {
         render_forward(
-            camera, img_size, means, log_scales, quats, sh_coeffs, opacity, background, bwd_info,
+            camera, img_size, means, log_scales, quats, sh_coeffs, opacity, background, bwd_info, mode,
         )
     }
 }
@@ -46,6 +47,7 @@ impl SplatForward<Self> for Fusion<MainBackendBase> {
         opacity: FloatTensor<Self>,
         background: Vec3,
         bwd_info: bool,
+        mode: RenderMode,
     ) -> (FloatTensor<Self>, RenderAux<Self>) {
         #[derive(Debug)]
         struct CustomOp {
@@ -54,6 +56,7 @@ impl SplatForward<Self> for Fusion<MainBackendBase> {
             bwd_info: bool,
             background: Vec3,
             desc: CustomOpIr,
+            mode: RenderMode,
         }
 
         impl<BT: BoolElement> Operation<FusionCubeRuntime<WgpuRuntime, BT>> for CustomOp {
@@ -87,6 +90,7 @@ impl SplatForward<Self> for Fusion<MainBackendBase> {
                     h.get_float_tensor::<MainBackendBase>(opacity),
                     self.background,
                     self.bwd_info,
+                    self.mode,
                 );
 
                 // Register output.
@@ -190,6 +194,7 @@ impl SplatForward<Self> for Fusion<MainBackendBase> {
             bwd_info,
             background,
             desc: desc.clone(),
+            mode,
         };
 
         let outputs = client

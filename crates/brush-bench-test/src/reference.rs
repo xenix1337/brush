@@ -133,6 +133,7 @@ async fn test_reference() -> Result<()> {
             splats.sh_coeffs.val().into_primitive().tensor(),
             splats.raw_opacities.val().into_primitive().tensor(),
             Vec3::ZERO,
+            brush_render::RenderMode::Standard,
         );
 
         let (out, aux) = (

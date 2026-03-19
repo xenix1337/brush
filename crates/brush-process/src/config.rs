@@ -38,6 +38,14 @@ pub struct ProcessConfig {
     /// PLY file to use for rendering dataset views. If provided, training is skipped.
     #[arg(long, help_heading = "Process options")]
     pub render: Option<String>,
+
+    /// PLY file to use for rendering splat index map instead of RGB colors. Treat all splats as solid.
+    #[arg(long, help_heading = "Process options")]
+    pub render_indexes: Option<String>,
+
+    /// PLY file to use for rendering the depth scene instead of RGB colors. Treat all splats as solid.
+    #[arg(long, help_heading = "Process options")]
+    pub render_depth: Option<String>,
 }
 
 #[derive(Parser, Clone)]

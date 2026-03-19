@@ -187,9 +187,27 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let R = mat3x3f(viewmat[0].xyz, viewmat[1].xyz, viewmat[2].xyz);
     let mean_c = R * mean + viewmat[3].xyz;
 
-    let covar = helpers::calc_cov3d(scale, quat);
-    let cov2d = helpers::calc_cov2d(covar, mean_c, uniforms.focal, uniforms.img_size, uniforms.pixel_center, viewmat);
+    let cov3d = helpers::calc_cov3d(scale, quat);
+    let covar_cam = R * cov3d * transpose(R);
+
+    // Compute the 2D projection Jacobian
+    let J = helpers::calc_cam_J(mean_c, uniforms.focal, uniforms.img_size, uniforms.pixel_center);
+    var cov2d = J * covar_cam * transpose(J);
+    cov2d[0][0] += 0.3; // COV_BLUR
+    cov2d[1][1] += 0.3;
+
     let conic = helpers::inverse(cov2d);
+
+    // Calculate depth-conditional variances for true 3D ellipsoid representation on screen:
+    let v20 = covar_cam[0][2];
+    let v21 = covar_cam[1][2];
+    let v22 = covar_cam[2][2];
+
+    let cov_z_xy = vec2f(
+        v20 * J[0][0] + v22 * J[2][0],
+        v21 * J[1][1] + v22 * J[2][1]
+    );
+    let cov_z_z = v22;
 
     // compute the projected mean
     let rz = 1.0 / mean_c.z;
@@ -245,6 +263,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     projected[compact_gid] = helpers::create_projected_splat(
         mean2d,
         vec3f(conic[0][0], conic[0][1], conic[1][1]),
-        vec4f(color, opac)
+        vec4f(color, opac),
+        mean_c.z,
+        cov_z_xy,
+        cov_z_z
     );
 }

@@ -74,10 +74,17 @@ struct ProjectedSplat {
     color_g: f32,
     color_b: f32,
     color_a: f32,
+    reserved_depth: f32,
+    cov_z_x: f32,
+    cov_z_y: f32,
+    cov_z_z: f32,
+    padding_a: f32,
+    padding_b: f32,
+    padding_c: f32,
 }
 
-fn create_projected_splat(xy: vec2f, conic: vec3f, color: vec4f) -> ProjectedSplat {
-    return ProjectedSplat(xy.x, xy.y, conic.x, conic.y, conic.z, color.r, color.g, color.b, color.a);
+fn create_projected_splat(xy: vec2f, conic: vec3f, color: vec4f, depth: f32, cov_z_xy: vec2f, cov_z_z: f32) -> ProjectedSplat {
+    return ProjectedSplat(xy.x, xy.y, conic.x, conic.y, conic.z, color.r, color.g, color.b, color.a, depth, cov_z_xy.x, cov_z_xy.y, cov_z_z, 0.0, 0.0, 0.0);
 }
 
 struct PackedVec3 {

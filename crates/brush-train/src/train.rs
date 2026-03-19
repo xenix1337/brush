@@ -9,7 +9,7 @@ use crate::{
 };
 
 use brush_dataset::{config::AlphaMode, scene::SceneBatch};
-use brush_render::{MainBackend, gaussian_splats::Splats};
+use brush_render::{MainBackend, RenderMode, gaussian_splats::Splats};
 use brush_render::{bounding_box::BoundingBox, sh::sh_coeffs_for_degree};
 use brush_render_bwd::burn_glue::SplatForwardDiff;
 use burn::{
@@ -125,6 +125,7 @@ impl SplatTrainer {
                 splats.sh_coeffs.val().into_primitive().tensor(),
                 splats.raw_opacities.val().into_primitive().tensor(),
                 background,
+                RenderMode::Standard,
             );
 
             let img = Tensor::from_primitive(TensorPrimitive::Float(diff_out.img));

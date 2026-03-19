@@ -31,6 +31,13 @@ pub mod validation;
 pub type MainBackendBase = CubeBackend<WgpuRuntime, f32, i32, u32>;
 pub type MainBackend = Fusion<MainBackendBase>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    Standard,
+    Indexes,
+    Depth,
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderStats {
     pub num_visible: u32,
@@ -60,9 +67,10 @@ pub trait SplatForward<B: Backend> {
         log_scales: FloatTensor<B>,
         quats: FloatTensor<B>,
         sh_coeffs: FloatTensor<B>,
-        raw_opacities: FloatTensor<B>,
+        opacity: FloatTensor<B>,
         background: Vec3,
         bwd_info: bool,
+        mode: RenderMode,
     ) -> (FloatTensor<B>, RenderAux<B>);
 }
 

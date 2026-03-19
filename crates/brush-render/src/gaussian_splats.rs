@@ -440,6 +440,7 @@ impl<B: Backend + SplatForward<B>> Splats<B> {
             self.raw_opacities.val().into_primitive().tensor(),
             background,
             false,
+            crate::RenderMode::Standard,
         );
         let img = Tensor::from_primitive(TensorPrimitive::Float(img));
         #[cfg(any(feature = "debug-validation", test))]

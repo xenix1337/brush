@@ -1,7 +1,7 @@
 use anyhow::Result;
 use brush_dataset::config::AlphaMode;
 use brush_dataset::scene::{sample_to_tensor_data, view_to_sample_image};
-use brush_render::SplatForward;
+use brush_render::{RenderMode, SplatForward};
 use brush_render::camera::Camera;
 use brush_render::gaussian_splats::Splats;
 use brush_render::render_aux::RenderAux;
@@ -18,6 +18,7 @@ pub struct EvalSample<B: Backend> {
     pub psnr: Tensor<B, 1>,
     pub ssim: Tensor<B, 1>,
     pub aux: RenderAux<B>,
+    pub mode: RenderMode,
 }
 
 pub fn eval_stats<B: Backend + SplatForward<B>>(
@@ -25,6 +26,7 @@ pub fn eval_stats<B: Backend + SplatForward<B>>(
     gt_cam: &Camera,
     gt_img: DynamicImage,
     alpha_mode: AlphaMode,
+    mode: RenderMode,
     device: &B::Device,
 ) -> Result<EvalSample<B>> {
     // Compare MSE in RGB only.
@@ -46,10 +48,11 @@ pub fn eval_stats<B: Backend + SplatForward<B>>(
             splats.raw_opacities.val().into_primitive().tensor(),
             Vec3::ZERO,
             true,
+            mode,
         );
         (Tensor::from_primitive(TensorPrimitive::Float(img)), aux)
     };
-    let render_rgb = img.slice(s![.., .., 0..3]);
+    let render_rgb = img.clone().slice(s![.., .., 0..3]);
 
     // Simulate an 8-bit roundtrip for fair comparison.
     let render_rgb = (render_rgb * 255.0).round() / 255.0;
@@ -64,7 +67,8 @@ pub fn eval_stats<B: Backend + SplatForward<B>>(
         gt_img,
         psnr,
         ssim,
-        rendered: render_rgb,
+        rendered: img, // Store the full 4 channels for depth export
         aux,
+        mode,
     })
 }

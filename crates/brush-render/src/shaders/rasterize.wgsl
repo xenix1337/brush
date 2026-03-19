@@ -50,7 +50,7 @@ fn main(
 
     // current visibility left to render
     var T = 1.0;
-    var pix_out = vec3f(0.0);
+    var pix_out = vec4f(0.0);
     var done = !inside;
 
     // each thread loads one gaussian at a time before rasterizing its
@@ -80,15 +80,28 @@ fn main(
 
             let delta = xy - pixel_coord;
             let sigma = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-            let alpha = min(0.999f, color.a * exp(-sigma));
+            var alpha = min(0.999f, color.a * exp(-sigma));
+
+#ifdef RENDER_DEPTH
+            // For depth, force full opacity inside a slightly smaller splat radius
+            if sigma >= 0.0f && sigma <= 0.9f {
+                alpha = 1.0f;
+            } else {
+                alpha = 0.0f; // Solid cut off
+            }
+#endif
+#ifdef RENDER_INDEXES
+            if sigma >= 0.0f && sigma <= 0.9f {
+                alpha = 1.0f;
+            } else {
+                alpha = 0.0f;
+            }
+#endif
 
             if sigma >= 0.0f && alpha >= 1.0f / 255.0f {
                 let next_T = T * (1.0 - alpha);
 
-                if next_T <= 1e-4f {
-                    done = true;
-                    break;
-                }
+                let is_done = next_T <= 1e-4f;
 
                 #ifdef BWD_INFO
                     // Count visible if contribution is at least somewhat significant.
@@ -96,8 +109,57 @@ fn main(
                 #endif
 
                 let vis = alpha * T;
-                pix_out += max(color.rgb, vec3f(0.0)) * vis;
+#ifdef RENDER_INDEXES
+                let gid = compact_gid_from_isect[batch_start + t];
+                let r = f32(gid & 255u) / 255.0;
+                let g = f32((gid >> 8u) & 255u) / 255.0;
+                let b = f32((gid >> 16u) & 255u) / 255.0;
+                pix_out += vec4f(r, g, b, 1.0) * vis;
+#else
+#ifdef RENDER_DEPTH
+                // proj.depth holds the z coordinate of the gaussian in camera space (added below)
+                // Need to extract depth. Actually, if it's solid, since it's sorted front-to-back,
+                // the depth is simply the first intersection. `T * (1.0 - alpha)` triggers the stop condition.
+                // mathematically correct true 3D ellipsoid bounds for depth representation on screen:
+                let cov_z_xy = vec2f(proj.cov_z_x, proj.cov_z_y);
+                
+                // Inverse 2D covariance * delta. Delta is (mu - x), therefore x - mu = -delta
+                let inv_cov_delta = vec2f(
+                    conic.x * delta.x + conic.y * delta.y,
+                    conic.y * delta.x + conic.z * delta.y
+                );
+                
+                let mean_z_offset = -dot(cov_z_xy, inv_cov_delta);
+                let depth_mean = proj.reserved_depth + mean_z_offset;
+                
+                // Conditional variance given viewing ray
+                let inv_cov_cov_z_xy = vec2f(
+                    conic.x * cov_z_xy.x + conic.y * cov_z_xy.y,
+                    conic.y * cov_z_xy.x + conic.z * cov_z_xy.y
+                );
+                let cond_var_z = proj.cov_z_z - dot(cov_z_xy, inv_cov_cov_z_xy);
+                
+                // Surface boundary depth difference along the z-axis (solid radius)
+                let z_offset = sqrt(max(0.0f, cond_var_z * 2.0f * max(0.0f, 0.9f - sigma)));
+                let depth = depth_mean - z_offset;
+                
+                // Pack float32 depth into RGB components manually to match our 32-bit `out_img` which is `array<u32>`
+                let depth_bits = bitcast<u32>(depth);
+                let r = f32((depth_bits) & 255u) / 255.0;
+                let g = f32((depth_bits >> 8u) & 255u) / 255.0;
+                let b = f32((depth_bits >> 16u) & 255u) / 255.0;
+                let a = f32((depth_bits >> 24u) & 255u) / 255.0;
+                
+                pix_out += vec4f(r, g, b, a) * vis;
+#else
+                pix_out += vec4f(max(color.rgb, vec3f(0.0)) * vis, 0.0);
+#endif
+#endif
                 T = next_T;
+                if is_done {
+                    done = true;
+                    break;
+                }
             }
         }
     }
@@ -105,7 +167,15 @@ fn main(
     if inside {
         // Compose with background. Nb that color is already pre-multiplied
         // by definition.
-        let final_color = vec4f(pix_out + T * uniforms.background.rgb, 1.0 - T);
+#ifdef RENDER_INDEXES        
+        let final_color = pix_out;
+#else
+#ifdef RENDER_DEPTH
+        let final_color = pix_out;
+#else
+        let final_color = vec4f(pix_out.rgb + T * uniforms.background.rgb, 1.0 - T);
+#endif
+#endif
 
         #ifdef BWD_INFO
             out_img[pix_id] = final_color;

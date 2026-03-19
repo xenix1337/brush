@@ -49,6 +49,7 @@ pub trait SplatForwardDiff<B: Backend> {
         sh_coeffs: FloatTensor<B>,
         raw_opacity: FloatTensor<B>,
         background: Vec3,
+        mode: brush_render::RenderMode,
     ) -> SplatOutputDiff<B>;
 }
 
@@ -179,6 +180,7 @@ impl<B: Backend + SplatBackwardOps<B> + SplatForward<B>, C: CheckpointStrategy>
         sh_coeffs: FloatTensor<Self>,
         raw_opacity: FloatTensor<Self>,
         background: Vec3,
+        mode: brush_render::RenderMode,
     ) -> SplatOutputDiff<Self> {
         // Get backend tensors & dequantize if needed. Could try and support quantized inputs
         // in the future.
@@ -210,6 +212,7 @@ impl<B: Backend + SplatBackwardOps<B> + SplatForward<B>, C: CheckpointStrategy>
             raw_opacity.clone().into_primitive(),
             background,
             true,
+            mode,
         );
 
         let wrapped_aux = RenderAux::<Self> {
