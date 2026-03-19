@@ -1075,7 +1075,6 @@ dependencies = [
  "brush-vfs",
  "clap",
  "humantime",
- "indicatif",
  "log",
  "tokio-stream",
  "tracing",

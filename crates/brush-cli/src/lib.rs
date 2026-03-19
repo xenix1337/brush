@@ -3,7 +3,6 @@
 use brush_process::{config::ProcessArgs, message::ProcessMessage};
 use brush_vfs::DataSource;
 use clap::{Error, Parser, builder::ArgPredicate, error::ErrorKind};
-use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 use tokio_stream::{Stream, StreamExt};
 use tracing::trace_span;
@@ -48,78 +47,10 @@ pub async fn process_ui(
     stream: impl Stream<Item = anyhow::Result<ProcessMessage>>,
     process_args: ProcessArgs,
 ) -> Result<(), anyhow::Error> {
-    // TODO: Find a way to make logging and indicatif to play nicely with eachother.
-    // let mut stream = std::pin::pin!(stream);
-    // while let Some(msg) = stream.next().await {
-    //     let _ = msg?;
-    // }
-
-    let main_spinner = ProgressBar::new_spinner().with_style(
-        ProgressStyle::with_template("{spinner:.blue} {msg}")
-            .expect("Invalid indacitif config")
-            .tick_strings(&[
-                "🖌️      ",
-                "█🖌️     ",
-                "▓█🖌️    ",
-                "░▓█🖌️   ",
-                "•░▓█🖌️  ",
-                "·•░▓█🖌️ ",
-                " ·•░▓🖌️ ",
-                "  ·•░🖌️ ",
-                "   ·•🖌️ ",
-                "    ·🖌️ ",
-                "     🖌️ ",
-                "    🖌️ █",
-                "   🖌️ █▓",
-                "  🖌️ █▓░",
-                " 🖌️ █▓░•",
-                "🖌️ █▓░•·",
-                "🖌️ ▓░•· ",
-                "🖌️ ░•·  ",
-                "🖌️ •·   ",
-                "🖌️ ·    ",
-                "🖌️      ",
-            ]),
-    );
-
-    let stats_spinner = ProgressBar::new_spinner().with_style(
-        ProgressStyle::with_template("{spinner:.blue} {msg}")
-            .expect("Invalid indicatif config")
-            .tick_strings(&["ℹ️", "ℹ️"]),
-    );
-
-    let eval_spinner = ProgressBar::new_spinner().with_style(
-        ProgressStyle::with_template("{spinner:.blue} {msg}")
-            .expect("Invalid indicatif config")
-            .tick_strings(&["✅", "✅"]),
-    );
-
-    let train_progress = ProgressBar::new(process_args.train_config.total_steps as u64)
-        .with_style(
-            ProgressStyle::with_template(
-                "[{elapsed}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg} ({per_sec}, {eta} remaining)",
-            )
-            .expect("Invalid indicatif config").progress_chars("◍○○"),
-        )
-        .with_message("Steps");
-
-    let sp = indicatif::MultiProgress::new();
-    let main_spinner = sp.add(main_spinner);
-    let train_progress = sp.add(train_progress);
-    let eval_spinner = sp.add(eval_spinner);
-    let stats_spinner = sp.add(stats_spinner);
-
-    main_spinner.enable_steady_tick(Duration::from_millis(120));
-    eval_spinner.set_message(format!(
-        "evaluating every {} steps",
-        process_args.process_config.eval_every,
-    ));
-    stats_spinner.set_message("Starting up");
     log::info!("Starting up");
 
     if cfg!(debug_assertions) {
-        let _ =
-            sp.println("ℹ️  running in debug mode, compile with --release for best performance");
+        log::info!("ℹ️  running in debug mode, compile with --release for best performance");
     }
 
     let mut duration = Duration::from_secs(0);
@@ -132,53 +63,47 @@ pub async fn process_ui(
             Ok(msg) => msg,
             Err(error) => {
                 // Don't print the error here. It'll bubble up and be printed as output.
-                let _ = sp.println("❌ Encountered an error");
+                log::error!("❌ Encountered an error");
                 return Err(error);
             }
         };
 
         match msg {
             ProcessMessage::NewSource => {
-                main_spinner.set_message("Starting process...");
+                log::info!("Starting process...");
             }
             ProcessMessage::StartLoading { training } => {
                 if !training {
-                    // Display a big warning saying viewing splats from the CLI doesn't make sense.
-                    let _ = sp.println("❌ Only training is supported in the CLI (try passing --with-viewer to view a splat)");
+                    log::error!("❌ Only training is supported in the CLI (try passing --with-viewer to view a splat)");
                     break;
                 }
-                main_spinner.set_message("Loading data...");
+                log::info!("Loading data...");
             }
             ProcessMessage::ViewSplats { .. } => {
-                // I guess we're already showing a warning.
             }
             ProcessMessage::Dataset { dataset } => {
                 let train_views = dataset.train.views.len();
                 let eval_views = dataset.eval.as_ref().map_or(0, |v| v.views.len());
                 log::info!("Loaded dataset with {train_views} training, {eval_views} eval views",);
-                main_spinner.set_message(format!(
-                    "Loading dataset with {train_views} training, {eval_views} eval views",
-                ));
                 if let Some(val) = dataset.eval.as_ref() {
-                    eval_spinner.set_message(format!(
+                    log::info!(
                         "evaluating {} views every {} steps",
                         val.views.len(),
                         process_args.process_config.eval_every,
-                    ));
+                    );
                 }
             }
             ProcessMessage::DoneLoading => {
                 log::info!("Completed loading.");
-                main_spinner.set_message("Completed loading");
-                stats_spinner.set_message("Completed loading");
             }
             ProcessMessage::TrainStep {
                 iter,
                 total_elapsed,
                 ..
             } => {
-                main_spinner.set_message("Training");
-                train_progress.set_position(iter as u64);
+                if iter % 100 == 0 {
+                    log::info!("Training step {iter}/{}", process_args.train_config.total_steps);
+                }
                 duration = total_elapsed;
             }
             ProcessMessage::RefineStep {
@@ -186,7 +111,6 @@ pub async fn process_ui(
                 iter,
                 ..
             } => {
-                stats_spinner.set_message(format!("Current splat count {cur_splat_count}"));
                 log::info!("Refine iter {iter}, {cur_splat_count} splats.");
             }
             ProcessMessage::EvalResult {
@@ -195,14 +119,9 @@ pub async fn process_ui(
                 avg_ssim,
             } => {
                 log::info!("Eval iter {iter}: PSNR {avg_psnr}, ssim {avg_ssim}");
-
-                eval_spinner.set_message(format!(
-                    "Eval iter {iter}: PSNR {avg_psnr}, ssim {avg_ssim}"
-                ));
             }
             ProcessMessage::Warning { error } => {
                 log::warn!("{error}");
-                sp.println("⚠️: {error}")?;
             }
             ProcessMessage::DoneTraining => {
                 log::info!("Done training.");
@@ -211,13 +130,8 @@ pub async fn process_ui(
     }
 
     let duration_secs = Duration::from_secs(duration.as_secs());
-    let _ = sp.println(format!(
-        "Training took {}",
-        humantime::format_duration(duration_secs)
-    ));
-
     log::info!(
-        "Done training! Took {:?}.",
+        "Training took {}",
         humantime::format_duration(duration_secs)
     );
 
